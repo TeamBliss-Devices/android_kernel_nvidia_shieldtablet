@@ -16,8 +16,6 @@
 #include <asm/cacheflush.h>
 #include <asm/mach-types.h>
 #include <asm/system_misc.h>
-#include <linux/memblock.h>
-#include <linux/of_fdt.h>
 
 extern const unsigned char relocate_new_kernel[];
 extern const unsigned int relocate_new_kernel_size;
