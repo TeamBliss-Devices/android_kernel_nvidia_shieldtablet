@@ -32,5 +32,26 @@
 			maxim,als-resolution = "0.75";
 		};
 	};
+
+	udc@7d000000 {
+		nvidia,id-detection-type = <1>;
+		nvidia,enable-pmu-vbus-detection;
+		nvidia,enable-aca-rid-detection;
+		extcon-cables = <&extcon_cable_xlate 0 &extcon_cable_xlate 2 &extcon_cable_xlate 5>;
+		extcon-cable-names = "vbus", "aca-rb", "aca-rc";
+		#extcon-cells = <1>;
+		status = "okay";
+	};
+
+	otg@7d000000 {
+		nvidia,enable-pmu-vbus-detection;
+		nvidia,id-detection-type = <1>;
+		nvidia,enable-y-cable-detection;
+		nvidia,enable-aca-rid-detection;
+		extcon-cables = <&extcon_cable_xlate 0 &extcon_cable_xlate 1 &extcon_cable_xlate 2 &extcon_cable_xlate 3 &extcon_cable_xlate 4 &extcon_cable_xlate 5>;
+		extcon-cable-names = "vbus", "id", "aca-ra", "y-cable", "aca-rb", "aca-rc";
+		#extcon-cells = <1>;
+		status = "okay";
+	};
 };
 

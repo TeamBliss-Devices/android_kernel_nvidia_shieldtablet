@@ -424,9 +424,10 @@ void oz_pd_stop(struct oz_pd *pd)
 	}
 	/* connect_req will restart timers */
 
-	/* Remove from PD list.*/
-	list_del(&pd->link);
-
+	if (list_empty(&pd->link))
+		WARN(1, "pd list is empty! something went wrong\n");
+	else /* Remove from PD list.*/
+		list_del(&pd->link);
 
 	oz_polling_unlock_bh();
 	oz_trace_msg(M, "pd ref count = %d\n", atomic_read(&pd->ref_count));
@@ -455,6 +456,7 @@ int oz_pd_sleep(struct oz_pd *pd)
 	stop_apps = pd->total_apps;
 	oz_polling_unlock_bh();
 	if (do_stop) {
+		pr_info("%s: disconnect requested from device\n", __func__);
 		oz_pd_stop(pd);
 	} else {
 		oz_services_stop(pd, stop_apps, 1);

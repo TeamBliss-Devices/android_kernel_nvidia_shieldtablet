@@ -65,6 +65,10 @@
 #include <dhd_proto.h>
 #include <dhd_dbg.h>
 
+#ifdef TEGRA_REGION_BASED_NVRAM
+#include "nvram_params.h"
+#endif
+
 /* Used for the bottom half, so same priority as the other irqthread */
 #define DHD_DEFAULT_RT_PRIORITY (MAX_USER_RT_PRIO / 2)
 
@@ -86,9 +90,16 @@
 		tegra_sysfs_histogram_tcpdump_rx(skb, __func__, __LINE__);\
 	}\
 
+#define DPC_CAPTURE(void)\
+	{\
+		tegra_sysfs_dpc_pkt();\
+	} \
+
 #else
 
 #define RX_CAPTURE(skb)
+
+#define DPC_CAPTURE(void)
 
 #endif
 
@@ -197,6 +208,7 @@ extern bool dhd_wlfc_skip_fc(void);
 extern void dhd_wlfc_plat_enable(void *dhd);
 extern void dhd_wlfc_plat_deinit(void *dhd);
 #endif /* PROP_TXSTATUS */
+extern int dhd_slpauto_config(dhd_pub_t *dhd, s32 val);
 
 #if LINUX_VERSION_CODE == KERNEL_VERSION(2, 6, 15)
 const char *
@@ -1793,6 +1805,47 @@ dhd_sendpkt(dhd_pub_t *dhdp, int ifidx, void *pktbuf)
 	return ret;
 }
 
+#ifdef TEGRA_REGION_BASED_NVRAM
+/* Set nvram based on country code.
+ * Return 1 if nvram has changed and firmware needs to be reloaded
+ * Return 0 otherwise
+ */
+
+int
+nv_dhd_set_nvram_params(char *country_code, struct net_device *net) {
+	int ret = 0;
+	char *nvram_code;
+	dhd_info_t *dhd = *(dhd_info_t **)netdev_priv(net);
+
+	nvram_code = country_to_nvram_code(country_code);
+
+	DHD_ERROR(("%s: current country_code: %s, new country_code: %s\n",
+		__func__, current_ccode, country_code));
+	DHD_ERROR(("%s: current nvram_code: %s, new nvram_code: %s\n",
+		__func__, current_nvram_code, nvram_code));
+
+	if (strncmp(country_code, current_ccode, COUNTRY_CODE_LEN) == 0) {
+		DHD_ERROR(("%s: Country code unchanged: %s\n", __func__, country_code));
+		ret = 0;
+	} else if (strncmp(nvram_code, current_nvram_code, COUNTRY_CODE_LEN) == 0) {
+		DHD_ERROR(("%s: no change in nvram require\n", __func__));
+		strncpy(current_ccode, country_code, COUNTRY_CODE_LEN);
+		ret = 0;
+	} else {
+		strncpy(current_nvram_code, nvram_code, COUNTRY_CODE_LEN);
+		strncpy(current_ccode, country_code, COUNTRY_CODE_LEN);
+		get_nvram_param(nvram_code);
+		dhd_bus_set_nvram_params(dhd->pub.bus, nvram_params);
+		ret = 1;
+	}
+
+	if (nvram_code)
+		kfree(nvram_code);
+
+	return ret;
+}
+#endif /* TEGRA_REGION_BASED_NVRAM */
+
 int
 dhd_start_xmit(struct sk_buff *skb, struct net_device *net)
 {
@@ -2397,6 +2450,7 @@ dhd_dpc_thread(void *data)
 				dhd_os_wd_timer_extend(&dhd->pub, TRUE);
 				timeout = jiffies + msecs_to_jiffies(100);
 				loopcnt = 0;
+				/* DPC_CAPTURE(); */
 				while (dhd_bus_dpc(dhd->pub.bus)) {
 					++loopcnt;
 					if (time_after(jiffies, timeout) &&
@@ -6936,3 +6990,22 @@ void htsf_update(dhd_info_t *dhd, void *data)
 }
 
 #endif /* WLMEDIA_HTSF */
+
+int
+dhd_set_slpauto_mode(struct net_device *dev, s32 val)
+{
+	dhd_info_t *dhd = *(dhd_info_t **)netdev_priv(dev);
+	int ret;
+
+	if (!dhd)
+		return -1;
+
+	DHD_ERROR(("Setting dhd auto sleep(dhd_slpauto) to %s\n",
+			val ? "enable" : "disable"));
+	dhd_os_sdlock(&dhd->pub);
+	val = htod32(val);
+	ret = dhd_slpauto_config(&dhd->pub, val);
+	dhd_os_sdunlock(&dhd->pub);
+
+	return ret;
+}

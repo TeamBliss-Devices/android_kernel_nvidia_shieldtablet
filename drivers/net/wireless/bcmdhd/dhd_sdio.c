@@ -66,6 +66,10 @@
 #include <dhdioctl.h>
 #include <sdiovar.h>
 
+#ifdef TEGRA_REGION_BASED_NVRAM
+#include "nvram_params.h"
+#endif /* TEGRA_REGION_BASED_NVRAM */
+
 bool dhd_mp_halting(dhd_pub_t *dhdp);
 extern void bcmsdh_waitfor_iodrain(void *sdh);
 extern void bcmsdh_reject_ioreqs(void *sdh, bool reject);
@@ -7806,7 +7810,10 @@ dhdsdio_download_nvram(struct dhd_bus *bus)
 	char *bufp;
 	char *pnv_path;
 	bool nvram_file_exists;
-
+#ifdef TEGRA_REGION_BASED_NVRAM
+	char country_code[COUNTRY_CODE_LEN];
+	char *nvram_code;
+#endif
 	pnv_path = bus->nv_path;
 
 	nvram_file_exists = ((pnv_path != NULL) && (pnv_path[0] != '\0'));
@@ -7827,6 +7834,30 @@ dhdsdio_download_nvram(struct dhd_bus *bus)
 	}
 
 	/* Download variables */
+#ifdef TEGRA_REGION_BASED_NVRAM
+	if (bus->nvram_params == NULL) {
+		if (get_country_code_fs(country_code)) {
+			/* nvram is not yet set */
+			if (set_country_code_fs("XV")) {
+				DHD_ERROR(("%s: Setting default country code/nvram for XV fail\n", __func__));
+				goto err;
+			} else {
+				DHD_ERROR(("%s: Setting default country code/nvram for XV\n", __func__));
+				strncpy(current_ccode, "XV", 2);
+			}
+		} else {
+			DHD_ERROR(("%s:set saved country code  :%s\n", __func__, country_code));
+			strncpy(current_ccode, country_code, 2);
+		}
+		nvram_code = country_to_nvram_code(current_ccode);
+		strncpy(current_nvram_code, nvram_code, 2);
+		get_nvram_param(nvram_code);
+		bus->nvram_params = nvram_params;
+	}
+	len = strlen(bus->nvram_params);
+	ASSERT(len <= MAX_NVRAMBUF_SIZE);
+	memcpy(memblock, bus->nvram_params, len);
+#else
 	if (nvram_file_exists) {
 		len = dhd_os_get_image_block(memblock, MAX_NVRAMBUF_SIZE, image);
 	}
@@ -7835,6 +7866,7 @@ dhdsdio_download_nvram(struct dhd_bus *bus)
 		ASSERT(len <= MAX_NVRAMBUF_SIZE);
 		memcpy(memblock, bus->nvram_params, len);
 	}
+#endif /* TEGRA_REGION_BASED_NVRAM */
 	if (len > 0 && len < MAX_NVRAMBUF_SIZE) {
 		bufp = (char *)memblock;
 		bufp[len] = 0;
@@ -7863,7 +7895,10 @@ err:
 
 	if (image)
 		dhd_os_close_image(image);
-
+#ifdef TEGRA_REGION_BASED_NVRAM
+	if (nvram_code)
+		kfree(nvram_code);
+#endif
 	return bcmerror;
 }
 
@@ -7993,7 +8028,6 @@ static int
 _dhdsdio_download_firmware(struct dhd_bus *bus)
 {
 	int bcmerror = -1;
-	char *p;
 
 	bool embed = FALSE;	/* download embedded firmware */
 	bool dlok = FALSE;	/* download firmware succeeded */
@@ -8395,4 +8429,31 @@ dhd_get_chipid(dhd_pub_t *dhd)
 		return (uint16)bus->sih->chip;
 	else
 		return 0;
+}
+
+int
+dhd_slpauto_config(dhd_pub_t *dhd, s32 val)
+{
+	dhd_bus_t *bus = dhd->bus;
+	bool enb;
+
+	if (!bus)
+		return BCME_ERROR;
+
+	if (val < 0 || val > 1)
+		return BCME_BADARG;
+
+	enb = (val) ? TRUE : FALSE;
+	if (enb == dhd_slpauto)
+		return BCME_OK;
+
+	if (bus->sleeping) {
+		dhdsdio_bussleep(bus, FALSE);
+		dhd_slpauto = bus->_slpauto = enb;
+		if (enb)
+			dhdsdio_bussleep(bus, TRUE);
+	} else
+		dhd_slpauto = bus->_slpauto = enb;
+
+	return BCME_OK;
 }

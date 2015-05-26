@@ -23,6 +23,7 @@
 #define TCPDUMP_TAG_FREE	'?'
 #define TCPDUMP_TAG_RX		'<'
 #define TCPDUMP_TAG_TX		'>'
+#define TCPDUMP_TAG_TIME	'@'
 
 #ifndef TCPDUMP_NETIF_MAXSIZ
 #define TCPDUMP_NETIF_MAXSIZ	16
@@ -57,6 +58,8 @@ typedef struct {
 } tcpdump_pkt_t;
 
 DEFINE_SPINLOCK(tcpdump_lock);
+
+extern int lp0_logs_enable;
 int tcpdump_head;
 int tcpdump_tail;
 unsigned long tcpdump_serial_no;
@@ -65,7 +68,14 @@ int tcpdump_maxpkt = sizeof(tcpdump_pkt) / sizeof(tcpdump_pkt[0]);
 static int pkt_save = 1;
 static int pkt_rx_save = 1;
 static int pkt_tx_save = 1;
+static int insert_dummy_timepacket;
+static struct timespec time_stamp;
 
+struct dummy_time {
+	unsigned long time_sec;
+	unsigned long jiffies;
+	unsigned long time_nsec;
+} dt;
 static void
 tcpdump_set_maxpkt(int maxpkt)
 {
@@ -134,8 +144,11 @@ tcpdump_pkt_save(char tag, const char *netif, const char *func, int line,
 	pkt.serial_no = tcpdump_serial_no++;
 	pkt.time = jiffies;
 	tcpdump_pkt[i] = pkt;
+	if (tcpdump_maxpkt != 0 && tcpdump_tail == 1) {
+//		pr_info("%s: head %d %d\n", __func__, tcpdump_tail, tcpdump_maxpkt);
+		insert_dummy_timepacket = 1;
+	}
 	spin_unlock_irqrestore(&tcpdump_lock, flags);
-
 	/* TODO - analyze packet jitter / etc. */
 
 }
@@ -149,7 +162,7 @@ tegra_sysfs_histogram_tcpdump_rx(struct sk_buff *skb,
 	struct net_device *netdev = skb ? skb->dev : NULL;
 	char *netif = netdev ? netdev->name : "";
 
-	if (skb->protocol == ETHER_TYPE_BRCM_REV)
+	if (skb->protocol == ETHER_TYPE_BRCM_REV && lp0_logs_enable == 0)
 		return;
 
 	if (!pkt_rx_save)
@@ -178,6 +191,20 @@ tegra_sysfs_histogram_tcpdump_tx(struct sk_buff *skb,
 
 	tcpdump_pkt_save(TCPDUMP_TAG_TX, netif, func, line,
 		skb->data, skb_headlen(skb), skb->data_len);
+	if (insert_dummy_timepacket == 1) {
+		insert_dummy_timepacket = 0;
+		dt.jiffies = jiffies;
+		getnstimeofday(&time_stamp);
+		dt.time_sec = time_stamp.tv_sec;
+		dt.time_nsec = time_stamp.tv_nsec;
+		tcpdump_pkt_save(TCPDUMP_TAG_TIME,
+		netif,
+		"dummy_time",
+		0,
+		(unsigned char *) &dt,
+		sizeof(struct dummy_time),
+		0);
+	}
 }
 
 void
@@ -297,28 +324,44 @@ tegra_sysfs_histogram_tcpdump_store(struct device *dev,
 //	pr_info("%s\n", __func__);
 
 	if (strncmp(buf, "enable", 6) == 0) {
+		pr_info("%s: tcpdump enabled\n", __func__);
 		pkt_save = 1;
 		maxpkt = sizeof(tcpdump_pkt) / sizeof(tcpdump_pkt[0]);
 	} else if (strncmp(buf, "disable", 7) == 0) {
+		pr_info("%s: tcpdump disabled\n", __func__);
 		pkt_save = 0;
 		maxpkt = 0;
 	} else if (strncmp(buf, "stop", 4) == 0) {
+		pr_info("%s: tcpdump stopped\n", __func__);
 		pkt_save = 0;
 		return count;
 	} else if (strncmp(buf, "start", 5) == 0) {
+		pr_info("%s: tcpdump started\n", __func__);
 		pkt_save = 1;
 		return count;
 	} else if (strncmp(buf, "rxstop", 6) == 0) {
+		pr_info("%s: tcpdump rxstopped\n", __func__);
 		pkt_rx_save = 0;
 		return count;
 	} else if (strncmp(buf, "rxstart", 7) == 0) {
+		pr_info("%s: tcpdump rxstarted\n", __func__);
 		pkt_rx_save = 1;
 		return count;
 	} else if (strncmp(buf, "txstop", 6) == 0) {
+		pr_info("%s: tcpdump txstopped\n", __func__);
 		pkt_tx_save = 0;
 		return count;
 	} else if (strncmp(buf, "txstart", 7) == 0) {
+		pr_info("%s: tcpdump txstarted\n", __func__);
 		pkt_tx_save = 1;
+		return count;
+	} else if (strncmp(buf, "lp0_logs_start", 13) == 0) {
+		pr_info("%s: lp0 logs started\n", __func__);
+		lp0_logs_enable = 1;
+		return count;
+	} else if (strncmp(buf, "lp0_logs_stop", 12) == 0) {
+		pr_info("%s: lp0 logs stopped\n", __func__);
+		lp0_logs_enable = 0;
 		return count;
 	} else {
 		maxpkt = -1;

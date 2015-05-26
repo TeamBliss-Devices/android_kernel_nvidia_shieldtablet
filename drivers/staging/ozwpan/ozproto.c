@@ -1,6 +1,7 @@
 /* -----------------------------------------------------------------------------
  * Copyright (c) 2011 Ozmo Inc
  * Released under the GNU General Public License Version 2 (GPLv2).
+ * Copyright (c) 2015, NVIDIA CORPORATION. All rights reserved.
  * -----------------------------------------------------------------------------
  */
 #include <linux/init.h>
@@ -212,6 +213,8 @@ static struct oz_pd *oz_connect_req(struct oz_pd *cur_pd, struct oz_elt *elt,
 		pd->ms_per_isoc = body->ms_per_isoc;
 		if (!pd->ms_per_isoc)
 			pd->ms_per_isoc = 4;
+
+		pd->ms_isoc_latency = body->ms_isoc_latency;
 
 		switch (body->ms_isoc_latency & OZ_LATENCY_MASK) {
 		case OZ_ONE_MS_LATENCY:
@@ -456,6 +459,9 @@ static int oz_net_notifier(struct notifier_block *nb, unsigned long event,
 		oz_trace_msg(M, "%s: event %s\n", __func__,
 			(event == NETDEV_UNREGISTER) ?
 			"NETDEV_UNREGISTER" : "NETDEV_DOWN");
+		pr_info("%s: event %s\n", __func__,
+			(event == NETDEV_UNREGISTER) ?
+			"NETDEV_UNREGISTER" : "NETDEV_DOWN");
 		oz_binding_remove(dev->name);
 		break;
 	}
@@ -498,6 +504,7 @@ void oz_protocol_term(void)
 			list_first_entry(&g_pd_list, struct oz_pd, link);
 		oz_pd_get(pd);
 		spin_unlock_bh(&g_polling_lock);
+		pr_info("%s: Protocol stop requested\n", __func__);
 		oz_pd_stop(pd);
 		oz_pd_put(pd);
 		spin_lock_bh(&g_polling_lock);
@@ -539,6 +546,7 @@ void oz_pd_timeout_handler(unsigned long data)
 		oz_pd_sleep(pd);
 		break;
 	case OZ_TIMER_STOP:
+		pr_info("%s: timeout happend.\n", __func__);
 		oz_trace_msg(D, "OZ_TIMER_STOP:\n");
 		oz_pd_stop(pd);
 		break;
@@ -794,6 +802,7 @@ void oz_binding_remove(const char *net_dev)
 	int found = 0;
 
 	oz_trace_msg(M, "Removing binding: '%s'\n", net_dev);
+	pr_info("%s: Remove binding: '%s'\n", __func__, net_dev);
 	spin_lock_bh(&g_binding_lock);
 	list_for_each_entry_safe(binding, tmp, &g_binding, link) {
 		if (compare_binding_name(binding->name, net_dev)) {
@@ -853,6 +862,37 @@ static char *oz_get_next_device_name(char *s, char *dname, int max_size)
 	*dname = 0;
 	return s;
 }
+
+int oz_get_latency(void)
+{
+	int latency = 0;
+	struct oz_pd *pd;
+	struct list_head *e;
+
+	spin_lock_bh(&g_polling_lock);
+	if (list_empty(&g_pd_list)) {
+		spin_unlock_bh(&g_polling_lock);
+		return -ENODEV;
+	}
+	e = g_pd_list.next;
+	pd = container_of(e, struct oz_pd, link);
+
+	switch (pd->ms_isoc_latency & OZ_LATENCY_MASK) {
+	case OZ_ONE_MS_LATENCY:
+		latency = (pd->ms_isoc_latency & ~OZ_LATENCY_MASK);
+		break;
+	case OZ_TEN_MS_LATENCY:
+		latency = ((pd->ms_isoc_latency & ~OZ_LATENCY_MASK) * 10);
+		break;
+	default:
+		latency = pd->isoc_latency * pd->ms_per_isoc;
+	}
+
+	spin_unlock_bh(&g_polling_lock);
+
+	return latency;
+}
+
 /*------------------------------------------------------------------------------
  * Context: process
  */

@@ -3,7 +3,7 @@
  *
  * GK20A Graphics
  *
- * Copyright (c) 2011-2014, NVIDIA CORPORATION.  All rights reserved.
+ * Copyright (c) 2011-2015, NVIDIA CORPORATION.  All rights reserved.
  *
  * This program is free software; you can redistribute it and/or modify it
  * under the terms and conditions of the GNU General Public License,
@@ -1617,15 +1617,12 @@ void gk20a_reset(struct gk20a *g, u32 units)
 }
 
 /**
- * gk20a_do_idle() - force the GPU to idle and railgate
+ * __gk20a_do_idle() - force the GPU to idle and railgate
  *
- * In success, this call MUST be balanced by caller with gk20a_do_unidle()
+ * In success, this call MUST be balanced by caller with __gk20a_do_unidle()
  */
-int gk20a_do_idle(void)
+int __gk20a_do_idle(struct platform_device *pdev, bool force_reset)
 {
-	struct platform_device *pdev = to_platform_device(
-		bus_find_device_by_name(&platform_bus_type,
-		NULL, "gk20a.0"));
 	struct gk20a *g = get_gk20a(pdev);
 	struct gk20a_platform *platform = dev_get_drvdata(&pdev->dev);
 	unsigned long timeout = jiffies +
@@ -1642,6 +1639,9 @@ int gk20a_do_idle(void)
 	/* check if it is already railgated ? */
 	if (platform->is_railgated(pdev))
 		return 0;
+
+	/* check if global force_reset flag is set */
+	force_reset |= platform->force_reset_in_do_idle;
 
 	/* prevent suspend by incrementing usage counter */
 	pm_runtime_get_noresume(&pdev->dev);
@@ -1669,7 +1669,7 @@ int gk20a_do_idle(void)
 	 */
 	pm_runtime_put_sync(&pdev->dev);
 
-	if (platform->can_railgate) {
+	if (platform->can_railgate && !force_reset) {
 		/* add sufficient delay to allow GPU to rail gate */
 		msleep(platform->railgate_delay);
 
@@ -1707,13 +1707,29 @@ fail_timeout:
 }
 
 /**
- * gk20a_do_unidle() - unblock all the tasks blocked by gk20a_do_idle()
+ * gk20a_do_idle() - wrap up for __gk20a_do_idle() to be called
+ * from outside of GPU driver
+ *
+ * In success, this call MUST be balanced by caller with gk20a_do_unidle()
  */
-int gk20a_do_unidle(void)
+int gk20a_do_idle(void)
 {
-	struct platform_device *pdev = to_platform_device(
-		bus_find_device_by_name(&platform_bus_type,
-		NULL, "gk20a.0"));
+	struct device_node *node =
+			of_find_matching_node(NULL, tegra_gk20a_of_match);
+	struct platform_device *pdev = of_find_device_by_node(node);
+
+	int ret =  __gk20a_do_idle(pdev, true);
+
+	of_node_put(node);
+
+	return ret;
+}
+
+/**
+ * __gk20a_do_unidle() - unblock all the tasks blocked by __gk20a_do_idle()
+ */
+int __gk20a_do_unidle(struct platform_device *pdev)
+{
 	struct gk20a *g = get_gk20a(pdev);
 	struct gk20a_platform *platform = dev_get_drvdata(&pdev->dev);
 
@@ -1731,6 +1747,22 @@ int gk20a_do_unidle(void)
 	up_write(&g->busy_lock);
 
 	return 0;
+}
+
+/**
+ * gk20a_do_unidle() - wrap up for __gk20a_do_unidle()
+ */
+int gk20a_do_unidle(void)
+{
+	struct device_node *node =
+			of_find_matching_node(NULL, tegra_gk20a_of_match);
+	struct platform_device *pdev = of_find_device_by_node(node);
+
+	int ret = __gk20a_do_unidle(pdev);
+
+	of_node_put(node);
+
+	return ret;
 }
 
 int gk20a_init_gpu_characteristics(struct gk20a *g)

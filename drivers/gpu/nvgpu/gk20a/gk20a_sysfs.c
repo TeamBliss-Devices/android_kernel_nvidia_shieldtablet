@@ -3,7 +3,7 @@
  *
  * GK20A Graphics
  *
- * Copyright (c) 2011-2014, NVIDIA CORPORATION.  All rights reserved.
+ * Copyright (c) 2011-2015, NVIDIA CORPORATION.  All rights reserved.
  *
  * This program is free software; you can redistribute it and/or modify it
  * under the terms and conditions of the GNU General Public License,
@@ -325,7 +325,7 @@ static ssize_t force_idle_store(struct device *device,
 		if (g->forced_idle)
 			return count; /* do nothing */
 		else {
-			err = gk20a_do_idle();
+			err = __gk20a_do_idle(ndev, false);
 			if (!err) {
 				g->forced_idle = 1;
 				dev_info(device, "gpu is idle : %d\n",
@@ -336,7 +336,7 @@ static ssize_t force_idle_store(struct device *device,
 		if (!g->forced_idle)
 			return count; /* do nothing */
 		else {
-			err = gk20a_do_unidle();
+			err = __gk20a_do_unidle(ndev);
 			if (!err) {
 				g->forced_idle = 0;
 				dev_info(device, "gpu is idle : %d\n",

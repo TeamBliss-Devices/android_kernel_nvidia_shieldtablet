@@ -1,7 +1,7 @@
 /*
  * drivers/usb/phy/tegra11x_usb_phy.c
  *
- * Copyright (c) 2012-2014 NVIDIA Corporation. All rights reserved.
+ * Copyright (c) 2012-2015 NVIDIA Corporation. All rights reserved.
  *
  *
  * This software is licensed under the terms of the GNU General Public
@@ -92,6 +92,7 @@
 #define   VDAT_DET_CHG_DET	(1 << 17)
 #define   VDAT_DET_STS		(1 << 18)
 #define   USB_ID_STATUS		(1 << 2)
+#define   USB_ID_SW_VALUE	(1 << 4)
 
 #define USB_IF_SPARE	0x498
 #define   USB_HS_RSM_EOP_EN         (1 << 4)
@@ -925,7 +926,11 @@ static int utmi_phy_power_off(struct tegra_usb_phy *phy)
 		if (phy->pdata->port_otg) {
 			bool id_present = false;
 			val = readl(base + USB_PHY_VBUS_WAKEUP_ID);
+#ifdef CONFIG_ARCH_TEGRA_21x_SOC
+			id_present = (val & USB_ID_SW_VALUE) ? false : true;
+#else
 			id_present = (val & USB_ID_STATUS) ? false : true;
+#endif
 			if (id_present)
 				pmc->pmc_ops->setup_pmc_wake_detect(pmc);
 		} else {
@@ -1554,7 +1559,7 @@ static bool cdp_charger_detection(struct tegra_usb_phy *phy)
 		__func__, __LINE__,
 		readl(base + UTMIP_BAT_CHRG_CFG0));
 
-	msleep(10);
+	msleep(TDPSRC_CON_MS);
 
 	val = readl(base + USB_PHY_VBUS_WAKEUP_ID);
 	if (val & VDAT_DET_STS) {
@@ -1600,6 +1605,17 @@ static bool maxim_charger_detection(struct tegra_usb_phy *phy)
 		utmi_phy_set_dp_dm_pull_up_down(phy, org_flags);
 	} else {
 		status = true;
+		/* Force wall charger to reset if detected as booting */
+		if (system_state != SYSTEM_RUNNING) {
+			/* Ensure we start from an initial state */
+			writel(0, base + UTMIP_BAT_CHRG_CFG0);
+			utmi_phy_set_dp_dm_pull_up_down(phy, 0);
+			org_flags = utmi_phy_set_dp_dm_pull_up_down(phy,
+					FORCE_PULLDN_DP | FORCE_PULLDN_DM);
+			ssleep(3);
+			msleep(500);
+			utmi_phy_set_dp_dm_pull_up_down(phy, org_flags);
+		}
 		DBG("%s: Maxim Charger detected\n", __func__);
 	}
 
@@ -1640,12 +1656,26 @@ static bool utmi_phy_qc2_charger_detect(struct tegra_usb_phy *phy,
 	writel(0, base + UTMIP_BAT_CHRG_CFG0);
 	utmi_phy_set_dp_dm_pull_up_down(phy, 0);
 
-	/* Force wall charger detection logic to reset */
-	org_flags = utmi_phy_set_dp_dm_pull_up_down(phy,
-		FORCE_PULLDN_DP | FORCE_PULLDN_DM);
-	ssleep(1);
-	msleep(500);
-	utmi_phy_set_dp_dm_pull_up_down(phy, org_flags);
+	/*
+	 * The QC2 charger can be inserted when the system is
+	 * powered down.  In this case it will act as a DCP unless
+	 * it is forced to negotiate voltage.  This is because
+	 * the QC2 charger will not see D+/D- voltage signaling
+	 * with in its negotiation timer window.
+	 * We try to detect this condition.  We know that if
+	 * we enter suspend then system must be active before
+	 * the QC2 charger was seen.
+	 * In this case no reset of the charger is needed, otherwise
+	 * we force the D+ and D- Pull Up down which will reset a
+	 * QC2 charger but have no effect on a normal DCP.
+	 */
+	if (system_state != SYSTEM_RUNNING) {
+		org_flags = utmi_phy_set_dp_dm_pull_up_down(phy,
+			FORCE_PULLDN_DP | FORCE_PULLDN_DM);
+		ssleep(1);
+		msleep(500);
+		utmi_phy_set_dp_dm_pull_up_down(phy, org_flags);
+	}
 
 	/* Enable charger detection logic */
 	val = readl(base + UTMIP_BAT_CHRG_CFG0);
@@ -2112,19 +2142,19 @@ static void uhsic_phy_restore_end(struct tegra_usb_phy *phy)
 		phy->ctrlr_suspended = false;
 	}
 
-	val = tegra_usb_pmc_reg_read(PMC_UHSIC_SLEEP_CFG(phy->inst));
-	if (val & UHSIC_MASTER_ENABLE(phy->inst)) {
-		val = readl(base + UHSIC_PADS_CFG1);
-		val &= ~(UHSIC_PD_TX);
-		writel(val, base + UHSIC_PADS_CFG1);
-	}
-
 	if (irq_disabled) {
 		local_irq_restore(flags);
 		usleep_range(25000, 26000);
 		local_irq_save(flags);
 	} else
 		usleep_range(10000, 11000);
+
+	val = tegra_usb_pmc_reg_read(PMC_UHSIC_SLEEP_CFG(phy->inst));
+	if (val & UHSIC_MASTER_ENABLE(phy->inst)) {
+		val = readl(base + UHSIC_PADS_CFG1);
+		val &= ~(UHSIC_PD_TX);
+		writel(val, base + UHSIC_PADS_CFG1);
+	}
 
 	pmc->pmc_ops->disable_pmc_bus_ctrl(pmc, 1);
 	phy->pmc_remote_wakeup = false;
