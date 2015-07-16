@@ -1,6 +1,8 @@
 GCOV_PROFILE := y
 
-subdir-ccflags-y := -Werror
+subdir-ccflags-y := 
+# Warning errors disabled:
+# -Werror
 
 # Tegra platform Support
 snd-soc-tegra-pcm-objs := tegra_pcm.o
